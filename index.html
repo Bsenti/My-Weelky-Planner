@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MY WEEKLY PLANNER</title>
+  <!-- React & ReactDOM CDN -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel Compiler -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Fonts: Roboto Condensed & Pretendard -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Condensed:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+    body { font-family: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, system-ui, Roboto, sans-serif; }
+    .font-roboto-condensed { font-family: 'Roboto Condensed', sans-serif; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            chalcedony: {
+              50: '#f0f9f9',
+              100: '#dcf2f2',
+              200: '#bce4e5',
+              300: '#8ecfd1',
+              400: '#58b2b6',
+              500: '#3ca8ad',
+              600: '#2e7d82',
+              700: '#2a6569',
+              800: '#265256',
+              900: '#234447',
+            }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen pb-12">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    const INITIAL_CATEGORIES = [
+      { id: 'cat-uncategorized', name: '미분류', order: 1 },
+      { id: 'cat-dorm', name: '🏡', order: 2 },
+      { id: 'cat-family', name: '🏠', order: 3 },
+      { id: 'cat-hospital', name: '🏥', order: 4 },
+      { id: 'cat-study', name: '✒️', order: 5 },
+      { id: 'cat-vacation', name: '🏖', order: 6 },
+      { id: 'cat-vehicle', name: '🚗', order: 7 },
+      { id: 'cat-work', name: '🦺', order: 8 },
+      { id: 'cat-church', name: '💒', order: 9 }
+    ];
+
+    const INITIAL_ROUTINES = [
+      { id: 'r1', title: '일 찍 자 기🔥', completedDays: {} },
+      { id: 'r2', title: '계시록 노트 묵상(매일 10분)', completedDays: {} },
+      { id: 'r3', title: '지출 입력하기(금요일 저녁)', completedDays: {} },
+      { id: 'r4', title: '차주 계획 세우기(토요일 저녁)', completedDays: {} }
+    ];
+
+    const Icon = ({ name, className = "w-4 h-4" }) => {
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      }, [name]);
+      return <i data-lucide={name} className={className}></i>;
+    };
+
+    const App = () => {
+      // 최초 실행 시 정사각형 이미지 로딩 대신 요청하신 텍스트 스플래시 화면을 띄움
+      const [showSplash, setShowSplash] = useState(true);
+      const [activeTab, setActiveTab] = useState('todos');
+      
+      const [categories, setCategories] = useState(() => {
+        const saved = localStorage.getItem('wp_categories');
+        return saved ? JSON.parse(saved) : INITIAL_CATEGORIES;
+      });
+      const [todos, setTodos] = useState(() => {
+        const saved = localStorage.getItem('wp_todos');
+        return saved ? JSON.parse(saved) : [];
+      });
+      const [schedules, setSchedules] = useState(() => {
+        const saved = localStorage.getItem('wp_schedules');
+        return saved ? JSON.parse(saved) : [];
+      });
+      const [routines, setRoutines] = useState(() => {
+        const saved = localStorage.getItem('wp_routines');
+        return saved ? JSON.parse(saved) : INITIAL_ROUTINES;
+      });
+      const [monthlyPlans, setMonthlyPlans] = useState(() => {
+        const saved = localStorage.getItem('wp_monthlyPlans');
+        return saved ? JSON.parse(saved) : {};
+      });
+
+      // 네비게이션 상태 (주간 오프셋, 월간 년/월)
+      const [weekOffset, setWeekOffset] = useState(0);
+      const [currentMonthNav, setCurrentMonthNav] = useState(() => {
+        const d = new Date();
+        return { year: d.getFullYear(), month: d.getMonth() + 1 };
+      });
+
+      // 모달 / 토글 상태
+      const [deleteModal, setDeleteModal] = useState({ isOpen: false, title: '', type: '', id: null });
+      const [importModal, setImportModal] = useState({ isOpen: false, targetDate: '' });
+      const [editCatModal, setEditCatModal] = useState({ isOpen: false, category: null });
+      const [expandedScheduleId, setExpandedScheduleId] = useState(null);
+      const [selectedStatPeriod, setSelectedStatPeriod] = useState('weekly');
+
+      // 검색 및 입력 필드
+      const [searchQuery, setSearchQuery] = useState('');
+      const [newTodoInput, setNewTodoInput] = useState('');
+      const [selectedCatForNewTodo, setSelectedCatForNewTodo] = useState(INITIAL_CATEGORIES[0].id);
+      const [newCatName, setNewCatName] = useState('');
+      const [newRoutineInput, setNewRoutineInput] = useState('');
+      const [newMonthlyInput, setNewMonthlyInput] = useState('');
+
+      // 최초 실행 시 스플래시 화면 1.5초간 표시 후 메인으로 진입
+      useEffect(() => {
+        const timer = setTimeout(() => setShowSplash(false), 1500);
+        return () => clearTimeout(timer);
+      }, []);
+
+      useEffect(() => { localStorage.setItem('wp_categories', JSON.stringify(categories)); }, [categories]);
+      useEffect(() => { localStorage.setItem('wp_todos', JSON.stringify(todos)); }, [todos]);
+      useEffect(() => { localStorage.setItem('wp_schedules', JSON.stringify(schedules)); }, [schedules]);
+      useEffect(() => { localStorage.setItem('wp_routines', JSON.stringify(routines)); }, [routines]);
+      useEffect(() => { localStorage.setItem('wp_monthlyPlans', JSON.stringify(monthlyPlans)); }, [monthlyPlans]);
+
+      const todayStr = new Date().toISOString().split('T')[0];
+      const currentYear = new Date().getFullYear();
+
+      // 주간 날짜 계산 (weekOffset 반영)
+      const getWeekDaysByOffset = (offset) => {
+        const curr = new Date();
+        const first = curr.getDate() - curr.getDay() + 1 + (offset * 7);
+        const days = [];
+        for (let i = 0; i < 7; i++) {
+          const next = new Date(curr.valueOf());
+          next.setDate(first + i);
+          days.push(next.toISOString().split('T')[0]);
+        }
+        return days;
+      };
+      const weekDays = useMemo(() => getWeekDaysByOffset(weekOffset), [weekOffset]);
+
+      // 지난 주 미완료 일정 자동 원복 로직 (이번 주 기준 이전 미완료 건)
+      useEffect(() => {
+        const mondayOfThisWeek = getWeekDaysByOffset(0)[0];
+        const expiredUncompleted = schedules.filter(s => !s.completed && s.date < mondayOfThisWeek);
+        
+        if (expiredUncompleted.length > 0) {
+          const restoredTodos = expiredUncompleted.map(item => ({
+            id: item.sourceTodoId || `todo-restored-${Date.now()}-${Math.random()}`,
+            categoryId: item.categoryId || 'cat-uncategorized',
+            title: item.title,
+            details: item.details || '',
+            completed: false,
+            createdAt: new Date().toISOString()
+          }));
+
+          setTodos(prev => [...restoredTodos, ...prev]);
+          setSchedules(prev => prev.filter(s => !( !s.completed && s.date < mondayOfThisWeek )));
+        }
+      }, []);
+
+      // 삭제 처리
+      const requestDelete = (title, type, id) => setDeleteModal({ isOpen: true, title, type, id });
+      const confirmDelete = () => {
+        const { type, id } = deleteModal;
+        if (type === 'todo') setTodos(prev => prev.filter(i => i.id !== id));
+        if (type === 'schedule') setSchedules(prev => prev.filter(i => i.id !== id));
+        if (type === 'routine') setRoutines(prev => prev.filter(i => i.id !== id));
+        if (type === 'monthly') {
+          setMonthlyPlans(prev => {
+            const copy = { ...prev };
+            const yStr = String(currentMonthNav.year);
+            const mStr = String(currentMonthNav.month);
+            if (copy[yStr] && copy[yStr].months && copy[yStr].months[mStr]) {
+              copy[yStr].months[mStr] = copy[yStr].months[mStr].filter(m => m.id !== id);
+            }
+            return copy;
+          });
+        }
+        if (type === 'category') {
+          setCategories(prev => prev.filter(c => c.id !== id));
+          setTodos(prev => prev.map(t => t.categoryId === id ? { ...t, categoryId: 'cat-uncategorized' } : t));
+        }
+        setDeleteModal({ isOpen: false, title: '', type: '', id: null });
+      };
+
+      // 할 일 추가
+      const handleAddTodo = (e) => {
+        e.preventDefault();
+        if (!newTodoInput.trim()) return;
+        setTodos(prev => [{
+          id: `todo-${Date.now()}`,
+          categoryId: selectedCatForNewTodo,
+          title: newTodoInput.trim(),
+          details: '',
+          completed: false,
+          createdAt: new Date().toISOString()
+        }, ...prev]);
+        setNewTodoInput('');
+      };
+
+      // 루틴 추가
+      const handleAddRoutine = (e) => {
+        e.preventDefault();
+        if (!newRoutineInput.trim()) return;
+        setRoutines(prev => [...prev, {
+          id: `routine-${Date.now()}`,
+          title: newRoutineInput.trim(),
+          completedDays: {}
+        }]);
+        setNewRoutineInput('');
+      };
+
+      // 월간 주요일정 추가
+      const handleAddMonthlyPlan = (e) => {
+        e.preventDefault();
+        if (!newMonthlyInput.trim()) return;
+        setMonthlyPlans(prev => {
+          const copy = JSON.parse(JSON.stringify(prev));
+          const yStr = String(currentMonthNav.year);
+          const mStr = String(currentMonthNav.month);
+          if (!copy[yStr]) copy[yStr] = { year: currentMonthNav.year, months: {} };
+          if (!copy[yStr].months[mStr]) copy[yStr].months[mStr] = [];
+          
+          copy[yStr].months[mStr].push({
+            id: `mitem-${Date.now()}`,
+            month: currentMonthNav.month,
+            year: currentMonthNav.year,
+            content: newMonthlyInput.trim(),
+            details: '',
+            createdAt: new Date().toISOString()
+          });
+          return copy;
+        });
+        setNewMonthlyInput('');
+      };
+
+      // 루틴 요일별 체크 토글
+      const toggleRoutineDay = (routineId, dateStr) => {
+        setRoutines(prev => prev.map(r => {
+          if (r.id === routineId) {
+            const updatedDays = { ...r.completedDays, [dateStr]: !r.completedDays[dateStr] };
+            return { ...r, completedDays: updatedDays };
+          }
+          return r;
+        }));
+      };
+
+      // 일정 세부사항 수정
+      const handleUpdateScheduleDetails = (id, details) => {
+        setSchedules(prev => prev.map(s => s.id === id ? { ...s, details } : s));
+      };
+
+      // 완료 상태 전환 (완료 날짜 저장)
+      const toggleScheduleComplete = (id) => {
+        setSchedules(prev => prev.map(s => {
+          if (s.id === id) {
+            const nextCompleted = !s.completed;
+            return {
+              ...s,
+              completed: nextCompleted,
+              completedAt: nextCompleted ? new Date().toISOString().split('T')[0] : null
+            };
+          }
+          return s;
+        }));
+      };
+
+      const toggleTodoComplete = (id) => {
+        setTodos(prev => prev.map(t => {
+          if (t.id === id) {
+            const nextCompleted = !t.completed;
+            return {
+              ...t,
+              completed: nextCompleted,
+              completedAt: nextCompleted ? new Date().toISOString().split('T')[0] : null
+            };
+          }
+          return t;
+        }));
+      };
+
+      // 카테고리 추가/수정
+      const handleSaveCategory = () => {
+        if (!newCatName.trim()) return;
+        if (editCatModal.category) {
+          setCategories(prev => prev.map(c => c.id === editCatModal.category.id ? { ...c, name: newCatName.trim() } : c));
+        } else {
+          setCategories(prev => [...prev, { id: `cat-${Date.now()}`, name: newCatName.trim(), order: categories.length + 1 }]);
+        }
+        setNewCatName('');
+        setEditCatModal({ isOpen: false, category: null });
+      };
+
+      // 할 일 ➔ 주간 일정 가져오기
+      const handleImportTodoToSchedule = (todoItem) => {
+        setSchedules(prev => [...prev, {
+          id: `sched-${Date.now()}`,
+          title: todoItem.title,
+          details: todoItem.details || '',
+          categoryId: todoItem.categoryId,
+          date: importModal.targetDate,
+          completed: false,
+          sourceTodoId: todoItem.id,
+          createdAt: new Date().toISOString()
+        }]);
+        setTodos(prev => prev.filter(t => t.id !== todoItem.id));
+        setImportModal({ isOpen: false, targetDate: '' });
+      };
+
+      // 통계 집계 데이터
+      const stats = useMemo(() => {
+        const completedSchedulesAll = schedules.filter(s => s.completed);
+        const completedTodosAll = todos.filter(t => t.completed);
+        const yearlyCompletedCount = completedSchedulesAll.length + completedTodosAll.length;
+
+        const calcRate = (done, total) => total > 0 ? Math.round((done / total) * 100) : 0;
+
+        let totalRoutineSlots = routines.length * 7;
+        let completedRoutineSlots = 0;
+        routines.forEach(r => {
+          weekDays.forEach(d => {
+            if (r.completedDays && r.completedDays[d]) completedRoutineSlots++;
+          });
+        });
+
+        const routineRate = calcRate(completedRoutineSlots, totalRoutineSlots);
+        const scheduleRate = calcRate(schedules.filter(s => s.completed).length, schedules.length);
+
+        return {
+          yearlyCompletedCount,
+          weekly: { routineRate, scheduleRate },
+          monthly: { routineRate, scheduleRate },
+          yearly: { routineRate, scheduleRate }
+        };
+      }, [schedules, todos, routines, weekDays]);
+
+      // 앱 최초 실행 시 뜨는 스플래시 화면 (정사각형 이미지 대신 요청하신 텍스트 표출)
+      if (showSplash) {
+        return (
+          <div className="fixed inset-0 bg-slate-900 text-white flex flex-col items-center justify-center z-50 p-4">
+            <div className="text-center space-y-3 font-roboto-condensed tracking-wider">
+              <h1 className="text-3xl font-bold text-chalcedony-400">MY WEEKLY PLANNER</h1>
+              <p className="text-sm text-slate-300 font-light">- 개발자 : 이종민-</p>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="max-w-4xl mx-auto px-3 sm:px-6 pt-4">
+          
+          {/* ====== 헤더 (질문자님이 마음에 들어하신 원본 디자인 그대로 유지!) ====== */}
+          <header className="bg-white border border-slate-200 rounded-2xl p-3 sm:p-4 mb-6 shadow-xs sticky top-2 z-30">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <div className="w-8 h-8 rounded-xl bg-chalcedony-500 flex items-center justify-center text-white font-bold text-sm shadow-sm">
+                  📅
+                </div>
+                <div>
+                  <h1 className="text-sm font-bold text-slate-900 leading-none">MY WEEKLY PLANNER</h1>
+                  <span className="text-[10px] text-chalcedony-600 font-semibold block mt-1">Chalcedony Edition</span>
+                </div>
+              </div>
+
+              <nav className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs font-medium overflow-x-auto no-scrollbar">
+                <button onClick={() => setActiveTab('todos')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'todos' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  할 일 ({todos.filter(t => !t.completed).length})
+                </button>
+                <button onClick={() => setActiveTab('weekly')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'weekly' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  주간
+                </button>
+                <button onClick={() => setActiveTab('monthly')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'monthly' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  월간
+                </button>
+                <button onClick={() => setActiveTab('completed')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'completed' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  완료된 일정
+                </button>
+                <button onClick={() => setActiveTab('stats')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'stats' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  통계
+                </button>
+                <button onClick={() => setActiveTab('settings')} className={`whitespace-nowrap px-3 py-1.5 rounded-lg transition ${activeTab === 'settings' ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'text-slate-600 hover:text-slate-900'}`}>
+                  설정
+                </button>
+              </nav>
+            </div>
+          </header>
+
+          {/* ====== 1. [할 일] 탭 ====== */}
+          {activeTab === 'todos' && (
+            <div className="space-y-6">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+                <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-1.5">
+                  <Icon name="plus-circle" className="w-4 h-4 text-chalcedony-500" /> 새 할 일 추가
+                </h2>
+                <form onSubmit={handleAddTodo} className="flex flex-col sm:flex-row gap-2">
+                  <select 
+                    value={selectedCatForNewTodo}
+                    onChange={(e) => setSelectedCatForNewTodo(e.target.value)}
+                    className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500"
+                  >
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.id}>{cat.name}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    placeholder="할 일을 입력하세요..."
+                    value={newTodoInput}
+                    onChange={(e) => setNewTodoInput(e.target.value)}
+                    className="flex-1 bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500"
+                  />
+                  <button type="submit" className="bg-chalcedony-500 hover:bg-chalcedony-600 text-white font-semibold text-xs px-5 py-2.5 rounded-xl transition shadow-xs whitespace-nowrap">
+                    추가
+                  </button>
+                </form>
+              </div>
+
+              <div className="flex justify-between items-center px-1">
+                <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">카테고리별 목록</h3>
+                <button 
+                  onClick={() => { setNewCatName(''); setEditCatModal({ isOpen: true, category: null }); }}
+                  className="text-xs text-chalcedony-600 font-semibold hover:underline flex items-center gap-1"
+                >
+                  <Icon name="folder-plus" className="w-3.5 h-3.5" /> 카테고리 추가
+                </button>
+              </div>
+
+              <div className="space-y-4">
+                {categories.map(cat => {
+                  const catTodos = todos.filter(t => t.categoryId === cat.id && !t.completed);
+                  return (
+                    <div key={cat.id} className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
+                        <span className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                          <span className="text-base">{cat.name}</span>
+                          <span className="text-xs text-slate-400 font-normal">({catTodos.length})</span>
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <button 
+                            onClick={() => { setNewCatName(cat.name); setEditCatModal({ isOpen: true, category: cat }); }}
+                            className="text-slate-400 hover:text-chalcedony-600 p-1 rounded-lg"
+                          >
+                            <Icon name="edit-2" className="w-3.5 h-3.5" />
+                          </button>
+                          {cat.id !== 'cat-uncategorized' && (
+                            <button 
+                              onClick={() => requestDelete(cat.name, 'category', cat.id)}
+                              className="text-slate-400 hover:text-red-500 p-1 rounded-lg"
+                            >
+                              <Icon name="trash-2" className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {catTodos.length === 0 ? (
+                        <p className="text-xs text-slate-400 py-2 text-center">등록된 할 일이 없습니다.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {catTodos.map(todo => (
+                            <div key={todo.id} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 border border-slate-100 hover:border-chalcedony-200 transition">
+                              <label className="flex items-center gap-2.5 cursor-pointer flex-1 min-w-0">
+                                <input
+                                  type="checkbox"
+                                  checked={todo.completed}
+                                  onChange={() => toggleTodoComplete(todo.id)}
+                                  className="w-4 h-4 rounded text-chalcedony-500 focus:ring-chalcedony-400"
+                                />
+                                <span className="text-xs text-slate-700 font-medium truncate">{todo.title}</span>
+                              </label>
+                              <button
+                                onClick={() => requestDelete(todo.title, 'todo', todo.id)}
+                                className="text-slate-300 hover:text-red-500 p-1 rounded"
+                              >
+                                <Icon name="x" className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ====== 2. [주간 일정] 탭 (이전/다음 주 네비게이션 버튼 포함) ====== */}
+          {activeTab === 'weekly' && (
+            <div className="space-y-6">
+              
+              {/* 주간 네비게이션 바 (이전주 / 다음주) */}
+              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                <button
+                  onClick={() => setWeekOffset(prev => prev - 1)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1"
+                >
+                  <Icon name="chevron-left" className="w-4 h-4" /> 이전 주
+                </button>
+                <div className="text-xs font-bold text-slate-800">
+                  {weekDays[0]} ~ {weekDays[6]} {weekOffset === 0 ? '(이번 주)' : ''}
+                </div>
+                <button
+                  onClick={() => setWeekOffset(prev => prev + 1)}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1"
+                >
+                  다음 주 <Icon name="chevron-right" className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* 루틴 섹션 */}
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-2">
+                  <h2 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <Icon name="repeat" className="w-4 h-4 text-chalcedony-500" /> 주간 루틴 체크
+                  </h2>
+                  <form onSubmit={handleAddRoutine} className="flex gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="새 루틴 입력..."
+                      value={newRoutineInput}
+                      onChange={(e) => setNewRoutineInput(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-chalcedony-500 w-32 sm:w-44"
+                    />
+                    <button type="submit" className="bg-chalcedony-500 text-white text-xs px-3 py-1 rounded-lg font-semibold hover:bg-chalcedony-600">
+                      추가
+                    </button>
+                  </form>
+                </div>
+
+                {routines.length === 0 ? (
+                  <p className="text-xs text-slate-400 py-3 text-center">등록된 루틴이 없습니다.</p>
+                ) : (
+                  <div className="overflow-x-auto no-scrollbar">
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr className="border-b border-slate-100 text-slate-400 font-semibold">
+                          <th className="pb-2 font-medium min-w-[120px]">루틴 내용</th>
+                          {['월', '화', '수', '목', '금', '토', '일'].map((dayName, idx) => (
+                            <th key={idx} className="pb-2 text-center w-10">{dayName}</th>
+                          ))}
+                          <th className="pb-2 text-right w-8">관리</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {routines.map(routine => (
+                          <tr key={routine.id} className="hover:bg-slate-50/50">
+                            <td className="py-2.5 font-medium text-slate-700 truncate max-w-[140px]">{routine.title}</td>
+                            {weekDays.map((dateStr, idx) => {
+                              const isChecked = routine.completedDays && routine.completedDays[dateStr];
+                              return (
+                                <td key={idx} className="py-2.5 text-center">
+                                  <button
+                                    onClick={() => toggleRoutineDay(routine.id, dateStr)}
+                                    className={`w-6 h-6 rounded-lg mx-auto flex items-center justify-center transition ${isChecked ? 'bg-chalcedony-500 text-white font-bold shadow-xs' : 'bg-slate-100 text-slate-300 hover:bg-slate-200'}`}
+                                  >
+                                    {isChecked ? '✓' : ''}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                            <td className="py-2.5 text-right">
+                              <button
+                                onClick={() => requestDelete(routine.title, 'routine', routine.id)}
+                                className="text-slate-300 hover:text-red-500 p-1"
+                              >
+                                <Icon name="trash-2" className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* 요일별 일정 카드 목록 */}
+              <div className="flex justify-between items-center">
+                <h2 className="text-sm font-bold text-slate-800">요일별 일정</h2>
+                <span className="text-xs text-slate-400">오늘: {todayStr}</span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {weekDays.map(dayStr => {
+                  const daySchedules = schedules.filter(s => s.date === dayStr);
+                  const dayOfWeek = ['일', '월', '화', '수', '목', '금', '토'][new Date(dayStr).getDay()];
+                  const isToday = dayStr === todayStr;
+
+                  return (
+                    <div key={dayStr} className={`bg-white rounded-2xl border p-4 shadow-xs ${isToday ? 'border-chalcedony-400 ring-1 ring-chalcedony-300' : 'border-slate-200'}`}>
+                      <div className="flex items-center justify-between mb-3 border-b border-slate-100 pb-2">
+                        <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${isToday ? 'bg-chalcedony-500 text-white' : 'bg-slate-100 text-slate-700'}`}>
+                          {dayStr} ({dayOfWeek})
+                        </span>
+                        
+                        <button
+                          onClick={() => setImportModal({ isOpen: true, targetDate: dayStr })}
+                          className="text-xs bg-chalcedony-50 text-chalcedony-600 hover:bg-chalcedony-100 px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1 border border-chalcedony-200"
+                        >
+                          <Icon name="download" className="w-3 h-3" /> 가져오기
+                        </button>
+                      </div>
+
+                      {daySchedules.length === 0 ? (
+                        <p className="text-xs text-slate-400 py-3 text-center">등록된 일정이 없습니다.</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {daySchedules.map(item => {
+                            const hasDetails = item.details && item.details.trim().length > 0;
+                            const isExpanded = expandedScheduleId === item.id;
+
+                            return (
+                              <div 
+                                key={item.id} 
+                                className={`rounded-xl border transition ${hasDetails ? 'bg-chalcedony-50/70 border-chalcedony-300' : 'bg-slate-50 border-slate-100'}`}
+                              >
+                                <div className="p-2.5 flex items-center justify-between">
+                                  <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={item.completed}
+                                      onChange={() => toggleScheduleComplete(item.id)}
+                                      className="w-4 h-4 rounded text-chalcedony-500 focus:ring-chalcedony-400"
+                                    />
+                                    <span 
+                                      onClick={(e) => { e.preventDefault(); setExpandedScheduleId(isExpanded ? null : item.id); }}
+                                      className={`text-xs font-medium truncate ${item.completed ? 'line-through text-slate-400' : 'text-slate-800'}`}
+                                    >
+                                      {item.title}
+                                    </span>
+                                    {hasDetails && (
+                                      <span className="text-[10px] bg-chalcedony-200 text-chalcedony-800 px-1.5 py-0.5 rounded font-semibold flex items-center gap-0.5">
+                                        <Icon name="file-text" className="w-2.5 h-2.5" /> 메모
+                                      </span>
+                                    )}
+                                  </label>
+
+                                  <div className="flex items-center gap-1">
+                                    <button 
+                                      onClick={() => setExpandedScheduleId(isExpanded ? null : item.id)}
+                                      className="text-slate-400 hover:text-chalcedony-600 p-1"
+                                    >
+                                      <Icon name={isExpanded ? "chevron-up" : "chevron-down"} className="w-3.5 h-3.5" />
+                                    </button>
+                                    <button
+                                      onClick={() => requestDelete(item.title, 'schedule', item.id)}
+                                      className="text-slate-300 hover:text-red-500 p-1"
+                                    >
+                                      <Icon name="trash-2" className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {isExpanded && (
+                                  <div className="p-2.5 pt-0 border-t border-slate-200/50 mt-1">
+                                    <textarea
+                                      rows="2"
+                                      placeholder="세부사항을 입력하세요..."
+                                      value={item.details || ''}
+                                      onChange={(e) => handleUpdateScheduleDetails(item.id, e.target.value)}
+                                      className="w-full text-xs p-2 rounded-lg bg-white border border-slate-200 outline-none focus:border-chalcedony-500 text-slate-700"
+                                    />
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ====== 3. [월간] 탭 ====== */}
+          {activeTab === 'monthly' && (
+            <div className="space-y-6">
+              <div className="bg-white p-3 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
+                <button
+                  onClick={() => {
+                    setCurrentMonthNav(prev => {
+                      if (prev.month === 1) return { year: prev.year - 1, month: 12 };
+                      return { ...prev, month: prev.month - 1 };
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1"
+                >
+                  <Icon name="chevron-left" className="w-4 h-4" /> 이전 달
+                </button>
+                <div className="text-sm font-bold text-slate-800">
+                  {currentMonthNav.year}년 {currentMonthNav.month}월
+                </div>
+                <button
+                  onClick={() => {
+                    setCurrentMonthNav(prev => {
+                      if (prev.month === 12) return { year: prev.year + 1, month: 1 };
+                      return { ...prev, month: prev.month + 1 };
+                    });
+                  }}
+                  className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1"
+                >
+                  다음 달 <Icon name="chevron-right" className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-xs space-y-4">
+                <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                  <h2 className="text-sm font-bold text-slate-800 flex items-center gap-1.5">
+                    <Icon name="calendar" className="w-4 h-4 text-chalcedony-500" /> {currentMonthNav.year}년 {currentMonthNav.month}월 주요일정
+                  </h2>
+                  <form onSubmit={handleAddMonthlyPlan} className="flex gap-1.5">
+                    <input
+                      type="text"
+                      placeholder="월간 일정 입력..."
+                      value={newMonthlyInput}
+                      onChange={(e) => setNewMonthlyInput(e.target.value)}
+                      className="bg-slate-50 border border-slate-200 text-xs rounded-lg px-3 py-1.5 outline-none focus:border-chalcedony-500 w-36 sm:w-52"
+                    />
+                    <button type="submit" className="bg-chalcedony-500 text-white text-xs px-4 py-1.5 rounded-lg font-semibold hover:bg-chalcedony-600">
+                      추가
+                    </button>
+                  </form>
+                </div>
+
+                {(() => {
+                  const yStr = String(currentMonthNav.year);
+                  const mStr = String(currentMonthNav.month);
+                  const currentMonthItems = (monthlyPlans[yStr] && monthlyPlans[yStr].months && monthlyPlans[yStr].months[mStr]) || [];
+
+                  if (currentMonthItems.length === 0) {
+                    return <p className="text-xs text-slate-400 py-8 text-center">등록된 월간 주요일정이 없습니다.</p>;
+                  }
+
+                  return (
+                    <div className="space-y-2">
+                      {currentMonthItems.map(item => (
+                        <div key={item.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                          <span className="text-xs font-medium text-slate-700">{item.content}</span>
+                          <button
+                            onClick={() => requestDelete(item.content, 'monthly', item.id)}
+                            className="text-slate-300 hover:text-red-500 p-1"
+                          >
+                            <Icon name="trash-2" className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ====== 4. [완료된 일정] 탭 ====== */}
+          {activeTab === 'completed' && (
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+                <h2 className="text-sm font-bold text-slate-800 mb-3 flex items-center gap-1.5">
+                  <Icon name="check-square" className="w-4 h-4 text-chalcedony-500" /> 완료된 일정 검색 및 이력
+                </h2>
+                
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="완료된 일정 키워드 검색..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl pl-9 pr-3 py-2.5 outline-none focus:border-chalcedony-500 text-slate-800"
+                  />
+                  <div className="absolute left-3 top-2.5 text-slate-400">
+                    <Icon name="search" className="w-4 h-4" />
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs space-y-2">
+                {(() => {
+                  const completedAll = [
+                    ...todos.filter(t => t.completed).map(t => ({ ...t, type: '할 일' })),
+                    ...schedules.filter(s => s.completed).map(s => ({ ...s, type: '일정' }))
+                  ].filter(item => item.title.toLowerCase().includes(searchQuery.toLowerCase()));
+
+                  if (completedAll.length === 0) {
+                    return <p className="text-xs text-slate-400 py-6 text-center">완료된 일정이 없습니다.</p>;
+                  }
+
+                  return completedAll.map(item => (
+                    <div key={item.id} className="flex items-center justify-between p-3 rounded-xl bg-slate-50 border border-slate-100">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className="text-[10px] bg-chalcedony-100 text-chalcedony-700 font-bold px-2 py-0.5 rounded-md">
+                          {item.type}
+                        </span>
+                        <span className="text-xs text-slate-700 line-through truncate">{item.title}</span>
+                      </div>
+                      <span className="text-[10px] text-chalcedony-600 font-semibold bg-chalcedony-50 px-2 py-1 rounded-md border border-chalcedony-200">
+                        완료일: {item.completedAt || '기록됨'}
+                      </span>
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          )}
+
+          {/* ====== 5. [통계] 탭 ====== */}
+          {activeTab === 'stats' && (
+            <div className="space-y-4">
+              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs text-center space-y-2">
+                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider block">올해 달성 일정 수</span>
+                <div className="text-3xl font-extrabold text-chalcedony-600">
+                  {stats.yearlyCompletedCount} <span className="text-base font-semibold text-slate-600">건 달성하였습니다</span>
+                </div>
+                <p className="text-[11px] text-slate-400">실시간 누적 데이터입니다.</p>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+                <h3 className="text-sm font-bold text-slate-800">기간별 성과 요약</h3>
+                
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    onClick={() => setSelectedStatPeriod('weekly')}
+                    className={`py-2.5 rounded-xl text-xs font-bold transition ${selectedStatPeriod === 'weekly' ? 'bg-chalcedony-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600'}`}
+                  >
+                    주간
+                  </button>
+                  <button
+                    onClick={() => setSelectedStatPeriod('monthly')}
+                    className={`py-2.5 rounded-xl text-xs font-bold transition ${selectedStatPeriod === 'monthly' ? 'bg-chalcedony-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600'}`}
+                  >
+                    월간
+                  </button>
+                  <button
+                    onClick={() => setSelectedStatPeriod('yearly')}
+                    className={`py-2.5 rounded-xl text-xs font-bold transition ${selectedStatPeriod === 'yearly' ? 'bg-chalcedony-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600'}`}
+                  >
+                    년간
+                  </button>
+                </div>
+
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-200 pb-2">
+                    <span className="text-xs font-bold text-slate-700">
+                      {selectedStatPeriod === 'weekly' && '이번 주 성과 리포트'}
+                      {selectedStatPeriod === 'monthly' && '이번 달 성과 리포트'}
+                      {selectedStatPeriod === 'yearly' && `${currentYear}년 성과 리포트`}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-slate-600">루틴 달성률</span>
+                      <span className="text-teal-600 font-bold">{stats[selectedStatPeriod].routineRate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                      <div className="bg-teal-500 h-full rounded-full transition-all duration-500" style={{ width: `${stats[selectedStatPeriod].routineRate}%` }}></div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <div className="flex justify-between text-xs font-semibold">
+                      <span className="text-slate-600">일정 달성률</span>
+                      <span className="text-chalcedony-600 font-bold">{stats[selectedStatPeriod].scheduleRate}%</span>
+                    </div>
+                    <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden">
+                      <div className="bg-chalcedony-500 h-full rounded-full transition-all duration-500" style={{ width: `${stats[selectedStatPeriod].scheduleRate}%` }}></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ====== 6. [설정] 탭 ====== */}
+          {activeTab === 'settings' && (
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+              <h2 className="text-sm font-bold text-slate-800 border-b pb-2">백업 및 복원</h2>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                변환된 백업 JSON 파일(<code className="bg-slate-100 text-chalcedony-600 px-1 py-0.5 rounded">weekly_planner_restore.json</code>)을 선택하여 이전 데이터를 복원하세요.
+              </p>
+              
+              <label className="block text-center bg-chalcedony-500 hover:bg-chalcedony-600 text-white font-semibold text-xs py-3 rounded-xl cursor-pointer transition shadow-xs">
+                백업 파일 복원하기
+                <input
+                  type="file"
+                  accept=".json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                      try {
+                        const parsed = JSON.parse(event.target.result);
+                        if (parsed.todos) setTodos(parsed.todos);
+                        if (parsed.schedules) setSchedules(parsed.schedules);
+                        if (parsed.routines) setRoutines(parsed.routines);
+                        if (parsed.monthlyPlans) setMonthlyPlans(parsed.monthlyPlans);
+                        alert('데이터가 성공적으로 복원되었습니다!');
+                      } catch (err) {
+                        alert('올바른 JSON 백업 파일이 아닙니다.');
+                      }
+                    };
+                    reader.readAsText(file);
+                  }}
+                />
+              </label>
+            </div>
+          )}
+
+          {/* ====== [모달] 삭제 팝업 ====== */}
+          {deleteModal.isOpen && (
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl p-5 max-w-xs w-full shadow-xl space-y-4 border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800 text-center">
+                  '<span className="text-chalcedony-600">{deleteModal.title}</span>' 항목을 삭제하시겠습니까?
+                </h3>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setDeleteModal({ isOpen: false, title: '', type: '', id: null })}
+                    className="flex-1 bg-slate-100 text-slate-600 text-xs py-2.5 rounded-xl font-semibold hover:bg-slate-200"
+                  >
+                    아니오
+                  </button>
+                  <button
+                    onClick={confirmDelete}
+                    className="flex-1 bg-red-500 text-white text-xs py-2.5 rounded-xl font-semibold hover:bg-red-600 shadow-xs"
+                  >
+                    예 (삭제)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ====== [모달] 가져오기 팝업 ====== */}
+          {importModal.isOpen && (
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl space-y-4 border border-slate-100 max-h-[80vh] flex flex-col">
+                <div className="flex justify-between items-center border-b pb-2">
+                  <h3 className="text-xs font-bold text-slate-800">
+                    [{importModal.targetDate}]에 가져올 할 일 선택
+                  </h3>
+                  <button onClick={() => setImportModal({ isOpen: false, targetDate: '' })} className="text-slate-400">
+                    <Icon name="x" className="w-4 h-4" />
+                  </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                  {todos.filter(t => !t.completed).length === 0 ? (
+                    <p className="text-xs text-slate-400 py-6 text-center">가져올 할 일이 없습니다.</p>
+                  ) : (
+                    todos.filter(t => !t.completed).map(todo => (
+                      <div
+                        key={todo.id}
+                        onClick={() => handleImportTodoToSchedule(todo)}
+                        className="p-3 rounded-xl bg-slate-50 hover:bg-chalcedony-50 border border-slate-100 hover:border-chalcedony-300 cursor-pointer flex justify-between items-center transition"
+                      >
+                        <span className="text-xs text-slate-700 font-medium">{todo.title}</span>
+                        <Icon name="chevron-right" className="w-4 h-4 text-chalcedony-500" />
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ====== [모달] 카테고리 추가/수정 ====== */}
+          {editCatModal.isOpen && (
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl p-5 max-w-xs w-full shadow-xl space-y-4 border border-slate-100">
+                <h3 className="text-sm font-bold text-slate-800">
+                  {editCatModal.category ? '카테고리 수정' : '새 카테고리 추가'}
+                </h3>
+                <input
+                  type="text"
+                  placeholder="예: 🏠 가정, 🏥 병원 등"
+                  value={newCatName}
+                  onChange={(e) => setNewCatName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setEditCatModal({ isOpen: false, category: null })}
+                    className="flex-1 bg-slate-100 text-slate-600 text-xs py-2.5 rounded-xl font-semibold"
+                  >
+                    취소
+                  </button>
+                  <button
+                    onClick={handleSaveCategory}
+                    className="flex-1 bg-chalcedony-500 text-white text-xs py-2.5 rounded-xl font-semibold hover:bg-chalcedony-600"
+                  >
+                    저장
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+        </div>
+      );
+    };
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
