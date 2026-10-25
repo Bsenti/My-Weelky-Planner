@@ -50,6 +50,9 @@
       { id: 'cat-church', name: '💒', order: 9 }
     ];
     const WEEKDAYS = ['월', '화', '수', '목', '금', '토', '일'];
+    // 기기 현지 날짜를 YYYY-MM-DD로 변환합니다. UTC로 바꾸지 않으므로 자정에 날짜가 어긋나지 않습니다.
+    const getLocalDateString = (date) =>
+      `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
     const ALL_WEEKDAY_INDICES = [0, 1, 2, 3, 4, 5, 6];
     const routineWeekdays = routine => Array.isArray(routine.scheduledWeekdays)
       ? routine.scheduledWeekdays : ALL_WEEKDAY_INDICES;
@@ -140,23 +143,51 @@
       useEffect(() => { localStorage.setItem('wp_routines', JSON.stringify(routines)); }, [routines]);
       useEffect(() => { localStorage.setItem('wp_monthlyPlans', JSON.stringify(monthlyPlans)); }, [monthlyPlans]);
 
-      const todayStr = new Date().toISOString().split('T')[0];
+      // 월요일 00:00에 주가 바뀌도록 현지 날짜를 상태로 관리합니다.
+      // 일요일은 기존 주의 마지막 날, 월요일은 새 주의 첫날입니다.
+      const [todayStr, setTodayStr] = useState(() => getLocalDateString(new Date()));
+      useEffect(() => {
+        let midnightTimer;
+        const refreshDate = () => setTodayStr(getLocalDateString(new Date()));
+        const onVisibilityChange = () => {
+          if (!document.hidden) refreshDate();
+        };
+        const scheduleMidnightUpdate = () => {
+          const now = new Date();
+          const nextMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+          midnightTimer = setTimeout(() => {
+            refreshDate();
+            scheduleMidnightUpdate();
+          }, Math.max(1, nextMidnight.getTime() - now.getTime() + 50));
+        };
+        scheduleMidnightUpdate();
+        window.addEventListener('focus', refreshDate);
+        document.addEventListener('visibilitychange', onVisibilityChange);
+        return () => {
+          clearTimeout(midnightTimer);
+          window.removeEventListener('focus', refreshDate);
+          document.removeEventListener('visibilitychange', onVisibilityChange);
+        };
+      }, []);
+
       const currentYear = new Date().getFullYear();
+      // JS의 getDay(): 일요일=0, 월요일=1. (getDay()+6)%7을 이용해 월요일을 0으로 맞춥니다.
+      // 현지 정오를 기준으로 날짜를 계산해 UTC 변환/서머타임 경계에서도 날짜가 밀리지 않게 합니다.
       const getWeekDaysByOffset = (offset) => {
-        const curr = new Date();
-        const first = curr.getDate() - curr.getDay() + 1 + (offset * 7);
+        const curr = new Date(`${todayStr}T12:00:00`);
+        const daysSinceMonday = (curr.getDay() + 6) % 7;
+        curr.setDate(curr.getDate() - daysSinceMonday + offset * 7);
         const days = [];
         for (let i = 0; i < 7; i++) {
-          const next = new Date(curr.valueOf());
-          next.setDate(first + i);
-          days.push(next.toISOString().split('T')[0]);
+          const next = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate() + i, 12);
+          days.push(getLocalDateString(next));
         }
         return days;
       };
-      const weekDays = useMemo(() => getWeekDaysByOffset(weekOffset), [weekOffset]);
+      const weekDays = useMemo(() => getWeekDaysByOffset(weekOffset), [weekOffset, todayStr]);
       const weekSchedules = useMemo(() => schedules.filter(s => weekDays.includes(s.date)), [schedules, weekDays]);
 
-      // [유지] 지난주 미완료 일정은 앱 시작 시 할 일로 복귀
+      // [유지] 지난주 미완료 일정은 앱 시작 시 및 월요일 00:00 주간 전환 시 할 일로 복귀
       useEffect(() => {
         const mondayOfThisWeek = getWeekDaysByOffset(0)[0];
         const expiredUncompleted = schedules.filter(s => !s.completed && s.date < mondayOfThisWeek);
@@ -170,7 +201,7 @@
           setTodos(prev => [...restoredTodos, ...prev]);
           setSchedules(prev => prev.filter(s => !(!s.completed && s.date < mondayOfThisWeek)));
         }
-      }, []);
+      }, [todayStr]);
 
       const requestDelete = (title, type, id) => setDeleteModal({ isOpen: true, title, type, id });
       const confirmDelete = () => {
@@ -277,13 +308,13 @@
       const toggleScheduleComplete = (id) => {
         setSchedules(prev => prev.map(s => s.id === id ? {
           ...s, completed: !s.completed,
-          completedAt: !s.completed ? new Date().toISOString().split('T')[0] : null
+          completedAt: !s.completed ? getLocalDateString(new Date()) : null
         } : s));
       };
       const toggleTodoComplete = (id) => {
         setTodos(prev => prev.map(t => t.id === id ? {
           ...t, completed: !t.completed,
-          completedAt: !t.completed ? new Date().toISOString().split('T')[0] : null
+          completedAt: !t.completed ? getLocalDateString(new Date()) : null
         } : t));
       };
       const handleSaveCategory = () => {
