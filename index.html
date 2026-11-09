@@ -37,6 +37,11 @@
 
   <script type="text/babel">
     const { useState, useEffect, useMemo } = React;
+    // 새 항목의 ID 충돌을 방지합니다. (기존 저장 데이터의 ID는 변경하지 않음)
+    const createPlannerId = (prefix) =>
+      `${prefix}-${typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`}`;
 
     const INITIAL_CATEGORIES = [
       { id: 'cat-uncategorized', name: '미분류', order: 1 },
@@ -67,57 +72,6 @@
     const Icon = ({ name, className = 'w-4 h-4' }) => {
       useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
       return <i data-lucide={name} className={className}></i>;
-    };
-
-    // 컴포넌트를 App 바깥에서 정의해야 타이핑할 때 버튼/아이콘이 반복 마운트되지 않습니다.
-    const EditButton = React.memo(({ onClick }) => (
-      <button type="button" onClick={onClick} title="수정" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
-        <Icon name="pencil" className="w-3.5 h-3.5" />
-      </button>
-    ));
-    const OrderButtons = React.memo(({ onUp, onDown }) => (
-      <>
-        <button type="button" onClick={onUp} title="위로 이동" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
-          <Icon name="arrow-up" className="w-3.5 h-3.5" />
-        </button>
-        <button type="button" onClick={onDown} title="아래로 이동" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
-          <Icon name="arrow-down" className="w-3.5 h-3.5" />
-        </button>
-      </>
-    ));
-
-    // 일정 상세 메모는 독립 입력기로 처리해 글자마다 전체 앱이 갱신되지 않게 합니다.
-    // 입력이 멈추면 저장하고, 다른 입력칸으로 옮기거나 해당 화면을 닫아도 저장합니다.
-    const ScheduleNoteInput = ({ initialValue, onSave }) => {
-      const inputRef = React.useRef(null);
-      const saveRef = React.useRef(onSave);
-      saveRef.current = onSave;
-      const timerRef = React.useRef(null);
-      const savedRef = React.useRef(initialValue || '');
-      const draftRef = React.useRef(initialValue || '');
-      const commit = () => {
-        clearTimeout(timerRef.current);
-        const next = draftRef.current;
-        if (next !== savedRef.current) {
-          savedRef.current = next;
-          saveRef.current(next);
-        }
-      };
-      React.useEffect(() => () => {
-        clearTimeout(timerRef.current);
-        if (draftRef.current !== savedRef.current) saveRef.current(draftRef.current);
-      }, []);
-      return (
-        <textarea ref={inputRef} rows="2" placeholder="세부사항을 입력하세요..."
-          defaultValue={initialValue || ''}
-          onChange={e => {
-            draftRef.current = e.target.value;
-            clearTimeout(timerRef.current);
-            timerRef.current = setTimeout(commit, 500);
-          }}
-          onBlur={commit}
-          className="w-full text-xs p-2 rounded-lg bg-white border border-slate-200 outline-none focus:border-chalcedony-500 text-slate-700" />
-      );
     };
 
     // [추가] 같은 카테고리/요일 안에서 해당 항목의 위치만 교환
@@ -164,6 +118,8 @@
       });
       const [deleteModal, setDeleteModal] = useState({ isOpen: false, title: '', type: '', id: null });
       const [importModal, setImportModal] = useState({ isOpen: false, targetDate: '' });
+      const [selectedImportTodoIds, setSelectedImportTodoIds] = useState([]);
+      const [weeklyImportCategoryFilter, setWeeklyImportCategoryFilter] = useState('all');
       const [editCatModal, setEditCatModal] = useState({ isOpen: false, category: null });
       const [expandedScheduleId, setExpandedScheduleId] = useState(null);
       const [selectedStatPeriod, setSelectedStatPeriod] = useState('weekly');
@@ -178,13 +134,11 @@
       // 완료된 일정: 1차 선택 -> 영구 삭제 시 2차 확인
       const [completedActionModal, setCompletedActionModal] = useState(null);
       const [searchQuery, setSearchQuery] = useState('');
-      const searchTimerRef = React.useRef(null);
-      // 입력 중 App 전체 리렌더링을 막기 위해 신규 텍스트는 uncontrolled ref로 관리합니다.
-      const newTodoInputRef = React.useRef(null);
+      const [newTodoInput, setNewTodoInput] = useState('');
       const [selectedCatForNewTodo, setSelectedCatForNewTodo] = useState(INITIAL_CATEGORIES[0].id);
-      const newCategoryInputRef = React.useRef(null);
-      const newRoutineInputRef = React.useRef(null);
-      const newMonthlyInputRef = React.useRef(null);
+      const [newCatName, setNewCatName] = useState('');
+      const [newRoutineInput, setNewRoutineInput] = useState('');
+      const [newMonthlyInput, setNewMonthlyInput] = useState('');
 
       useEffect(() => {
         const timer = setTimeout(() => setShowSplash(false), 1500);
@@ -192,27 +146,36 @@
       }, []);
       useEffect(() => { localStorage.setItem('wp_categories', JSON.stringify(categories)); }, [categories]);
       useEffect(() => { localStorage.setItem('wp_todos', JSON.stringify(todos)); }, [todos]);
-      // 일정 메모 편집 시 매 글자마다 동기식 JSON 저장하는 부담을 줄입니다.
-      // 입력이 잠시 멈춘 뒤 저장하되, 앱을 닫거나 다른 앱으로 이동하면 즉시 저장합니다.
-      const schedulesRef = React.useRef(schedules);
-      schedulesRef.current = schedules;
-      useEffect(() => {
-        const save = () => localStorage.setItem('wp_schedules', JSON.stringify(schedulesRef.current));
-        const timer = setTimeout(save, 300);
-        return () => clearTimeout(timer);
-      }, [schedules]);
-      useEffect(() => {
-        const save = () => localStorage.setItem('wp_schedules', JSON.stringify(schedulesRef.current));
-        const onVisibilityChange = () => { if (document.hidden) save(); };
-        window.addEventListener('pagehide', save);
-        document.addEventListener('visibilitychange', onVisibilityChange);
-        return () => {
-          window.removeEventListener('pagehide', save);
-          document.removeEventListener('visibilitychange', onVisibilityChange);
-        };
-      }, []);
+      useEffect(() => { localStorage.setItem('wp_schedules', JSON.stringify(schedules)); }, [schedules]);
       useEffect(() => { localStorage.setItem('wp_routines', JSON.stringify(routines)); }, [routines]);
       useEffect(() => { localStorage.setItem('wp_monthlyPlans', JSON.stringify(monthlyPlans)); }, [monthlyPlans]);
+
+      // 목록/가져오기 화면은 모두 현재 todos 상태를 공유합니다.
+      // 과거에 삭제된 카테고리를 가리키는 항목은 없애지 않고 '미분류'로 복구합니다.
+      useEffect(() => {
+        const validIds = new Set(categories.map(cat => cat.id));
+        if (!validIds.has(selectedCatForNewTodo)) setSelectedCatForNewTodo('cat-uncategorized');
+        if (validIds.has('cat-uncategorized')) {
+          setTodos(prev => prev.some(t => !validIds.has(t.categoryId))
+            ? prev.map(t => validIds.has(t.categoryId) ? t : { ...t, categoryId: 'cat-uncategorized' })
+            : prev);
+        }
+      }, [categories, selectedCatForNewTodo]);
+
+      // 할 일 화면과 같은 todos에서 매번 새로 계산하므로, 삭제·수정·이동이 즉시 반영됩니다.
+      const weeklyImportGroups = useMemo(() => {
+        const validIds = new Set(categories.map(c => c.id));
+        return categories.map(category => ({
+          category,
+          items: todos.filter(t => !t.completed && (t.categoryId === category.id ||
+            (category.id === 'cat-uncategorized' && !validIds.has(t.categoryId))))
+        })).filter(g => g.items.length);
+      }, [categories, todos]);
+      const importableIdSet = useMemo(
+        () => new Set(weeklyImportGroups.flatMap(g => g.items.map(t => t.id))), [weeklyImportGroups]);
+      const selectedValidImportIds = selectedImportTodoIds.filter(id => importableIdSet.has(id));
+      // 기존의 상단 '전체 카테고리/모두 선택' UI 역시 그룹의 같은 실시간 데이터를 사용합니다.
+      const importableTodos = useMemo(() => weeklyImportGroups.flatMap(g => g.items), [weeklyImportGroups]);
 
       // 월요일 00:00에 주가 바뀌도록 현지 날짜를 상태로 관리합니다.
       // 일요일은 기존 주의 마지막 날, 월요일은 새 주의 첫날입니다.
@@ -291,27 +254,27 @@
         if (type === 'category') {
           setCategories(prev => prev.filter(c => c.id !== id));
           setTodos(prev => prev.map(t => t.categoryId === id ? { ...t, categoryId: 'cat-uncategorized' } : t));
+          setSelectedCatForNewTodo(prev => prev === id ? 'cat-uncategorized' : prev);
         }
         setDeleteModal({ isOpen: false, title: '', type: '', id: null });
       };
 
       const handleAddTodo = (e) => {
         e.preventDefault();
-        const title = newTodoInputRef.current?.value.trim();
-        if (!title) return;
+        if (!newTodoInput.trim()) return;
         setTodos(prev => [{
-          id: `todo-${Date.now()}`, categoryId: selectedCatForNewTodo,
-          title, details: '', completed: false,
+          id: createPlannerId('todo'),
+          categoryId: categories.some(c => c.id === selectedCatForNewTodo) ? selectedCatForNewTodo : 'cat-uncategorized',
+          title: newTodoInput.trim(), details: '', completed: false,
           createdAt: new Date().toISOString()
         }, ...prev]);
-        if (newTodoInputRef.current) newTodoInputRef.current.value = '';
+        setNewTodoInput('');
       };
       const handleAddRoutine = (e) => {
         e.preventDefault();
-        const title = newRoutineInputRef.current?.value.trim();
-        if (!title) return;
+        if (!newRoutineInput.trim()) return;
         // '추가'를 누르면 곧장 저장하지 않고 요일 선택 팝업을 표시한다.
-        setRoutineModal({ id: null, title, scheduledWeekdays: [] });
+        setRoutineModal({ id: null, title: newRoutineInput.trim(), scheduledWeekdays: [] });
       };
       const openRoutineEdit = (routine) => {
         setRoutineModal({
@@ -330,13 +293,12 @@
       };
       const saveRoutineModal = (e) => {
         e.preventDefault();
-        if (!routineModal) return;
-        const title = e.currentTarget.elements.namedItem('routineTitle')?.value.trim() || '';
-        if (!title) return;
+        if (!routineModal?.title.trim()) return;
         if (!routineModal.scheduledWeekdays.length) {
           alert('루틴을 진행할 요일을 한 개 이상 선택해 주세요.');
           return;
         }
+        const title = routineModal.title.trim();
         const scheduledWeekdays = [...routineModal.scheduledWeekdays].sort((a, b) => a - b);
         if (routineModal.id) {
           // 기존 체크 이력과 루틴 순서는 그대로 보존
@@ -347,14 +309,13 @@
             id: `routine-${Date.now()}`,
             title, scheduledWeekdays, completedDays: {}
           }]);
-          if (newRoutineInputRef.current) newRoutineInputRef.current.value = '';
+          setNewRoutineInput('');
         }
         setRoutineModal(null);
       };
       const handleAddMonthlyPlan = (e) => {
         e.preventDefault();
-        const title = newMonthlyInputRef.current?.value.trim();
-        if (!title) return;
+        if (!newMonthlyInput.trim()) return;
         setMonthlyPlans(prev => {
           const copy = JSON.parse(JSON.stringify(prev));
           const y = String(currentMonthNav.year), m = String(currentMonthNav.month);
@@ -362,12 +323,12 @@
           if (!copy[y].months[m]) copy[y].months[m] = [];
           copy[y].months[m].push({
             id: `mitem-${Date.now()}`, month: currentMonthNav.month,
-            year: currentMonthNav.year, content: title,
+            year: currentMonthNav.year, content: newMonthlyInput.trim(),
             details: '', createdAt: new Date().toISOString()
           });
           return copy;
         });
-        if (newMonthlyInputRef.current) newMonthlyInputRef.current.value = '';
+        setNewMonthlyInput('');
       };
       const toggleRoutineDay = (routineId, dateStr, weekdayIndex) => {
         setRoutines(prev => prev.map(r => {
@@ -393,24 +354,46 @@
         } : t));
       };
       const handleSaveCategory = () => {
-        const name = newCategoryInputRef.current?.value.trim();
-        if (!name) return;
+        if (!newCatName.trim()) return;
         if (editCatModal.category) {
-          setCategories(prev => prev.map(c => c.id === editCatModal.category.id ? { ...c, name } : c));
+          setCategories(prev => prev.map(c => c.id === editCatModal.category.id ? { ...c, name: newCatName.trim() } : c));
         } else {
-          setCategories(prev => [...prev, { id: `cat-${Date.now()}`, name, order: categories.length + 1 }]);
+          setCategories(prev => [...prev, { id: `cat-${Date.now()}`, name: newCatName.trim(), order: categories.length + 1 }]);
         }
+        setNewCatName('');
         setEditCatModal({ isOpen: false, category: null });
       };
-      const handleImportTodoToSchedule = (todoItem) => {
-        setSchedules(prev => [...prev, {
-          id: `sched-${Date.now()}`, title: todoItem.title,
-          details: todoItem.details || '', categoryId: todoItem.categoryId,
-          date: importModal.targetDate, completed: false,
-          sourceTodoId: todoItem.id, createdAt: new Date().toISOString()
-        }]);
-        setTodos(prev => prev.filter(t => t.id !== todoItem.id));
+      // 요일별 '가져오기': 할 일과 연동되는 실시간 카테고리별 다중 선택
+      const openWeeklyImport = (targetDate) => {
+        setSelectedImportTodoIds([]);
+        setWeeklyImportCategoryFilter('all');
+        setImportModal({ isOpen: true, targetDate });
+      };
+      const closeWeeklyImport = () => {
+        setSelectedImportTodoIds([]);
+        setWeeklyImportCategoryFilter('all');
         setImportModal({ isOpen: false, targetDate: '' });
+      };
+      const toggleImportTodo = (id) => setSelectedImportTodoIds(prev =>
+        prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+      const toggleImportCategory = (items) => setSelectedImportTodoIds(prev => {
+        const all = items.every(t => prev.includes(t.id));
+        const rest = prev.filter(id => !items.some(t => t.id === id));
+        return all ? rest : [...rest, ...items.map(t => t.id)];
+      });
+      const importSelectedTodos = () => {
+        const picked = weeklyImportGroups.flatMap(g => g.items).filter(t => selectedValidImportIds.includes(t.id));
+        if (!picked.length) return;
+        const now = new Date().toISOString();
+        const newSchedules = picked.map(t => ({
+          id: `sched-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          title: t.title, details: t.details || '', categoryId: t.categoryId,
+          date: importModal.targetDate, completed: false, sourceTodoId: t.id, createdAt: now
+        }));
+        const pickedIds = new Set(picked.map(t => t.id));
+        setTodos(prev => prev.filter(t => !pickedIds.has(t.id)));
+        setSchedules(prev => [...prev, ...newSchedules]);
+        closeWeeklyImport();
       };
 
       // [추가] 서로 다른 카테고리에서 할 일 가져오기 (복사 아닌 이동)
@@ -504,12 +487,9 @@
       };
       const saveEdit = (e) => {
         e.preventDefault();
-        if (!editModal) return;
-        const form = e.currentTarget;
-        const { type, id, date, categoryId } = editModal;
-        const cleanTitle = form.elements.namedItem('editTitle')?.value.trim() || '';
-        const details = form.elements.namedItem('editDetails')?.value ?? editModal.details ?? '';
-        if (!cleanTitle) return;
+        if (!editModal || !editModal.title.trim()) return;
+        const { type, id, title, details, date, categoryId } = editModal;
+        const cleanTitle = title.trim();
         if (type === 'todo') {
           setTodos(prev => prev.map(i => i.id === id ? { ...i, title: cleanTitle, details,
             categoryId: categories.some(c => c.id === categoryId) ? categoryId : 'cat-uncategorized' } : i));
@@ -621,6 +601,23 @@
         };
       }, [schedules, todos, routines, weekDays]);
 
+      // 자주 사용하는 편집 / 순서 변경 버튼
+      const EditButton = ({ onClick }) => (
+        <button type="button" onClick={onClick} title="수정" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
+          <Icon name="pencil" className="w-3.5 h-3.5" />
+        </button>
+      );
+      const OrderButtons = ({ onUp, onDown }) => (
+        <>
+          <button type="button" onClick={onUp} title="위로 이동" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
+            <Icon name="arrow-up" className="w-3.5 h-3.5" />
+          </button>
+          <button type="button" onClick={onDown} title="아래로 이동" className="text-slate-400 hover:text-chalcedony-600 p-1 rounded">
+            <Icon name="arrow-down" className="w-3.5 h-3.5" />
+          </button>
+        </>
+      );
+
       if (showSplash) {
         return (
           <div className="fixed inset-0 bg-slate-900 text-white flex flex-col items-center justify-center z-50 p-4">
@@ -671,14 +668,15 @@
                     className="bg-slate-50 border border-slate-200 text-slate-700 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500">
                     {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
                   </select>
-                  <input type="text" placeholder="할 일을 입력하세요..." ref={newTodoInputRef}
+                  <input type="text" placeholder="할 일을 입력하세요..." value={newTodoInput}
+                    onChange={e => setNewTodoInput(e.target.value)}
                     className="flex-1 bg-slate-50 border border-slate-200 text-slate-800 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500" />
                   <button type="submit" className="bg-chalcedony-500 hover:bg-chalcedony-600 text-white font-semibold text-xs px-5 py-2.5 rounded-xl transition shadow-xs whitespace-nowrap">추가</button>
                 </form>
               </div>
               <div className="flex justify-between items-center px-1">
                 <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider">카테고리별 목록</h3>
-                <button onClick={() => setEditCatModal({ isOpen: true, category: null })}
+                <button onClick={() => { setNewCatName(''); setEditCatModal({ isOpen: true, category: null }); }}
                   className="text-xs text-chalcedony-600 font-semibold hover:underline flex items-center gap-1">
                   <Icon name="folder-plus" className="w-3.5 h-3.5" /> 카테고리 추가
                 </button>
@@ -700,7 +698,7 @@
                             <Icon name="download" className="w-3 h-3" /> 가져오기
                           </button>
                           <OrderButtons onUp={() => moveCategory(cat, -1)} onDown={() => moveCategory(cat, 1)} />
-                          <button onClick={() => setEditCatModal({ isOpen: true, category: cat })}
+                          <button onClick={() => { setNewCatName(cat.name); setEditCatModal({ isOpen: true, category: cat }); }}
                             className="text-slate-400 hover:text-chalcedony-600 p-1 rounded-lg">
                             <Icon name="edit-2" className="w-3.5 h-3.5" />
                           </button>
@@ -763,7 +761,7 @@
                     <Icon name="repeat" className="w-4 h-4 text-chalcedony-500" /> 주간 루틴 체크
                   </h2>
                   <form onSubmit={handleAddRoutine} className="flex gap-1.5">
-                    <input type="text" placeholder="새 루틴 입력..." ref={newRoutineInputRef}
+                    <input type="text" placeholder="새 루틴 입력..." value={newRoutineInput} onChange={e => setNewRoutineInput(e.target.value)}
                       className="bg-slate-50 border border-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-chalcedony-500 w-32 sm:w-44" />
                     <button type="submit" className="bg-chalcedony-500 text-white text-xs px-3 py-1 rounded-lg font-semibold hover:bg-chalcedony-600">추가</button>
                   </form>
@@ -883,7 +881,7 @@
                         <span className={`text-xs font-bold px-2.5 py-1 rounded-lg ${isToday ? 'bg-chalcedony-500 text-white' : 'bg-slate-100 text-slate-700'}`}>
                           {dayStr} ({dayOfWeek})
                         </span>
-                        <button onClick={() => setImportModal({ isOpen: true, targetDate: dayStr })}
+                        <button onClick={() => openWeeklyImport(dayStr)}
                           className="text-xs bg-chalcedony-50 text-chalcedony-600 hover:bg-chalcedony-100 px-2.5 py-1 rounded-lg font-semibold flex items-center gap-1 border border-chalcedony-200">
                           <Icon name="download" className="w-3 h-3" /> 가져오기
                         </button>
@@ -922,8 +920,9 @@
                                 </div>
                                 {isExpanded && (
                                   <div className="p-2.5 pt-2 border-t border-slate-200/50 mt-1 space-y-2">
-                                    <ScheduleNoteInput key={item.id} initialValue={item.details || ''}
-                                      onSave={details => handleUpdateScheduleDetails(item.id, details)} />
+                                    <textarea rows="2" placeholder="세부사항을 입력하세요..." value={item.details || ''}
+                                      onChange={e => handleUpdateScheduleDetails(item.id, e.target.value)}
+                                      className="w-full text-xs p-2 rounded-lg bg-white border border-slate-200 outline-none focus:border-chalcedony-500 text-slate-700" />
                                     <div className="flex items-center gap-2">
                                       <span className="text-xs text-slate-500 whitespace-nowrap">요일 이동</span>
                                       <select value={item.date} onChange={e => moveScheduleToDate(item.id, e.target.value)}
@@ -968,7 +967,7 @@
                     <Icon name="calendar" className="w-4 h-4 shrink-0 text-chalcedony-500" /> 주요사항
                   </h2>
                   <form onSubmit={handleAddMonthlyPlan} className="flex flex-1 min-w-0 justify-end gap-1.5">
-                    <input type="text" placeholder="주요사항" ref={newMonthlyInputRef}
+                    <input type="text" placeholder="주요사항" value={newMonthlyInput} onChange={e => setNewMonthlyInput(e.target.value)}
                       className="bg-slate-50 border border-slate-200 text-xs rounded-lg px-2.5 py-1.5 outline-none focus:border-chalcedony-500 min-w-0 flex-1 sm:flex-none sm:w-52" />
                     <button type="submit" className="shrink-0 whitespace-nowrap bg-chalcedony-500 text-white text-xs px-3 py-1.5 rounded-lg font-semibold hover:bg-chalcedony-600">추가</button>
                   </form>
@@ -1009,12 +1008,7 @@
                   <Icon name="check-square" className="w-4 h-4 text-chalcedony-500" /> 완료된 일정 검색 및 이력
                 </h2>
                 <div className="relative">
-                  <input type="text" placeholder="완료된 일정 키워드 검색..." defaultValue={searchQuery}
-                    onChange={e => {
-                      const value = e.target.value;
-                      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-                      searchTimerRef.current = setTimeout(() => setSearchQuery(value), 180);
-                    }}
+                  <input type="text" placeholder="완료된 일정 키워드 검색..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl pl-9 pr-3 py-2.5 outline-none focus:border-chalcedony-500 text-slate-800" />
                   <div className="absolute left-3 top-2.5 text-slate-400"><Icon name="search" className="w-4 h-4" /></div>
                 </div>
@@ -1239,28 +1233,77 @@
             </div>
           )}
 
-          {/* ====== 가져오기 팝업 ====== */}
+          {/* ====== 가져오기 팝업: 할 일과 실시간 연동 / 카테고리별 다중 선택 ====== */}
           {importModal.isOpen && (
-            <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-              <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl space-y-4 border border-slate-100 max-h-[80vh] flex flex-col">
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50">
+              <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl space-y-3 border border-slate-100 max-h-[85vh] flex flex-col">
                 <div className="flex justify-between items-center border-b pb-2">
-                  <h3 className="text-xs font-bold text-slate-800">[{importModal.targetDate}]에 가져올 할 일 선택</h3>
-                  <button onClick={() => setImportModal({ isOpen: false, targetDate: '' })} className="text-slate-400">
-                    <Icon name="x" className="w-4 h-4" />
-                  </button>
+                  <h3 className="text-sm font-bold text-slate-800">{importModal.targetDate}에 할 일 가져오기</h3>
+                  <button type="button" onClick={closeWeeklyImport} className="text-slate-400"><Icon name="x" className="w-4 h-4" /></button>
                 </div>
-                <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                  {todos.filter(t => !t.completed).length === 0 ? (
-                    <p className="text-xs text-slate-400 py-6 text-center">가져올 할 일이 없습니다.</p>
-                  ) : (
-                    todos.filter(t => !t.completed).map(todo => (
-                      <div key={todo.id} onClick={() => handleImportTodoToSchedule(todo)}
-                        className="p-3 rounded-xl bg-slate-50 hover:bg-chalcedony-50 border border-slate-100 hover:border-chalcedony-300 cursor-pointer flex justify-between items-center transition">
-                        <span className="text-xs text-slate-700 font-medium">{todo.title}</span>
-                        <Icon name="chevron-right" className="w-4 h-4 text-chalcedony-500" />
+                <p className="text-[11px] text-slate-500">여러 개를 선택할 수 있습니다. 가져온 항목은 할 일에서 빠지고 이 날짜로 이동합니다.</p>
+
+                {/* 기존 카테고리 필터와 전체 선택·선택 해제 기능 유지 */}
+                <div className="flex items-center gap-2">
+                  <label htmlFor="weekly-import-category-filter" className="text-xs font-bold text-slate-700 shrink-0">카테고리</label>
+                  <select id="weekly-import-category-filter"
+                    value={weeklyImportCategoryFilter}
+                    onChange={e => setWeeklyImportCategoryFilter(e.target.value)}
+                    className="flex-1 min-w-0 rounded-xl border border-chalcedony-200 bg-chalcedony-50 px-3 py-2.5 text-xs font-semibold text-chalcedony-800 outline-none focus:border-chalcedony-500">
+                    <option value="all">전체 카테고리 ({importableTodos.length})</option>
+                    {weeklyImportGroups.map(({ category, items }) => (
+                      <option key={category.id} value={category.id}>{category.name} ({items.length})</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex justify-between items-center gap-2 text-xs border-b border-slate-100 pb-3">
+                  <span className="text-chalcedony-700 font-bold whitespace-nowrap">총 {selectedValidImportIds.length}개 선택</span>
+                  <div className="flex items-center gap-2">
+                    <button type="button" onClick={() => setSelectedImportTodoIds(importableTodos.map(t => t.id))}
+                      disabled={!importableTodos.length}
+                      className="text-chalcedony-600 font-semibold disabled:opacity-40">모두 선택</button>
+                    <span className="text-slate-300">|</span>
+                    <button type="button" onClick={() => setSelectedImportTodoIds([])}
+                      disabled={!selectedValidImportIds.length}
+                      className="text-slate-500 disabled:opacity-40">선택 해제</button>
+                  </div>
+                </div>
+
+                <div className="flex-1 min-h-0 overflow-y-auto space-y-3 pr-1 overscroll-contain">
+                  {weeklyImportGroups.length === 0 ? (
+                    <p className="text-xs text-slate-400 py-8 text-center">가져올 할 일이 없습니다.</p>
+                  ) : weeklyImportGroups
+                    .filter(({ category }) => weeklyImportCategoryFilter === 'all' || category.id === weeklyImportCategoryFilter)
+                    .map(({ category, items }) => {
+                    const count = items.filter(t => selectedValidImportIds.includes(t.id)).length;
+                    return (
+                      <div key={category.id} className="space-y-1.5">
+                        <div className="flex items-center justify-between bg-chalcedony-50 rounded-lg px-2 py-1.5">
+                          <h4 className="text-[11px] font-bold text-chalcedony-700">{category.name} ({count}/{items.length})</h4>
+                          <button type="button" onClick={() => toggleImportCategory(items)} className="text-[11px] font-bold text-chalcedony-600">
+                            {count === items.length ? '해제' : '전체 선택'}
+                          </button>
+                        </div>
+                        {items.map(todo => {
+                          const checked = selectedValidImportIds.includes(todo.id);
+                          return (
+                            <label key={todo.id} className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer ${checked ? 'bg-chalcedony-50 border-chalcedony-300' : 'bg-slate-50 border-slate-100'}`}>
+                              <input type="checkbox" checked={checked} onChange={() => toggleImportTodo(todo.id)}
+                                className="w-4 h-4 shrink-0 rounded text-chalcedony-500" />
+                              <span className="text-xs text-slate-700 font-medium break-words min-w-0">{todo.title}</span>
+                            </label>
+                          );
+                        })}
                       </div>
-                    ))
-                  )}
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2 pt-2 border-t">
+                  <button type="button" onClick={closeWeeklyImport} className="flex-1 bg-slate-100 text-slate-600 text-xs py-3 rounded-xl font-semibold">취소</button>
+                  <button type="button" onClick={importSelectedTodos} disabled={!selectedValidImportIds.length}
+                    className="flex-1 bg-chalcedony-500 disabled:opacity-40 text-white text-xs py-3 rounded-xl font-semibold whitespace-nowrap">
+                    {selectedValidImportIds.length}개 가져오기
+                  </button>
                 </div>
               </div>
             </div>
@@ -1271,8 +1314,7 @@
             <div className="fixed inset-0 bg-black/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
               <div className="bg-white rounded-2xl p-5 max-w-xs w-full shadow-xl space-y-4 border border-slate-100">
                 <h3 className="text-sm font-bold text-slate-800">{editCatModal.category ? '카테고리 수정' : '새 카테고리 추가'}</h3>
-                <input type="text" placeholder="예: 🏠 가정, 🏥 병원 등" ref={newCategoryInputRef}
-                  defaultValue={editCatModal.category?.name || ''}
+                <input type="text" placeholder="예: 🏠 가정, 🏥 병원 등" value={newCatName} onChange={e => setNewCatName(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500" />
                 <div className="flex gap-2">
                   <button onClick={() => setEditCatModal({ isOpen: false, category: null })}
@@ -1293,7 +1335,8 @@
                 </h3>
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-600">루틴 이름</label>
-                  <input type="text" name="routineTitle" required autoFocus defaultValue={routineModal.title}
+                  <input type="text" required autoFocus value={routineModal.title}
+                    onChange={e => setRoutineModal(prev => ({ ...prev, title: e.target.value }))}
                     className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500" />
                 </div>
                 <div className="space-y-2">
@@ -1332,13 +1375,15 @@
                 </h3>
                 <div className="space-y-1.5">
                   <label className="text-xs font-semibold text-slate-600">제목</label>
-                  <input type="text" name="editTitle" required autoFocus defaultValue={editModal.title}
+                  <input type="text" required autoFocus value={editModal.title}
+                    onChange={e => setEditModal(prev => ({ ...prev, title: e.target.value }))}
                     className="w-full bg-slate-50 border border-slate-200 text-sm rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500" />
                 </div>
                 {editModal.type !== 'routine' && (
                   <div className="space-y-1.5">
                     <label className="text-xs font-semibold text-slate-600">세부 메모</label>
-                    <textarea rows="3" name="editDetails" defaultValue={editModal.details}
+                    <textarea rows="3" value={editModal.details}
+                      onChange={e => setEditModal(prev => ({ ...prev, details: e.target.value }))}
                       className="w-full bg-slate-50 border border-slate-200 text-xs rounded-xl px-3 py-2.5 outline-none focus:border-chalcedony-500" />
                   </div>
                 )}
